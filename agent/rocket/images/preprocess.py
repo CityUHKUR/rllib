@@ -15,7 +15,8 @@ def resize(input_image, shape):
     if isinstance(shape, tuple):
         shape = np.array(shape)
 
-    input_image = cv2.resize(input_image, (shape[0],shape[1]), interpolation=cv2.INTER_NEAREST)
+    input_image = cv2.resize(
+        input_image, (shape[0], shape[1]), interpolation=cv2.INTER_NEAREST)
     return input_image
 
 
@@ -35,7 +36,8 @@ def normalize(input_image, interval):
     # [lower, upper] = interval
     # normalized_frame = input_image / 255.0 * (upper-lower) + lower
 
-    normalized_frame = input_image / 255.0 * (interval[1] - interval[0]) + interval[1]
+    normalized_frame = input_image / 255.0 * \
+        (interval[1] - interval[0]) + interval[1]
 
     return normalized_frame
 
@@ -79,8 +81,6 @@ def preprocess_frame(frame, interval=(0, 1), shape=[128, 128, 3], out_channel='c
     # Normalize Frame into [0,1]
     normalized_frame = normalize(preprocessed_frame, interval)
 
-
-
     # Add noise if desired
     return normalized_frame
 
@@ -97,10 +97,11 @@ def stack_frames(stacked_frames, state, is_new_episode, shape=[128, 128, 3], sta
 
     if is_new_episode:
         # Clear our stacked_frames
-        stacked_frames = deque([np.zeros(tuple(shape), dtype=np.float64) for i in range(stack_size)], maxlen=stack_size)
+        stacked_frames = deque([np.zeros(tuple(shape), dtype=np.float64)
+                               for i in range(stack_size)], maxlen=stack_size)
 
         # Because we're in a new episode, copy the same frame 4x
-        for i in range(stack_size):
+        for _ in range(stack_size):
             stacked_frames.append(frame)
 
         # Stack the frames

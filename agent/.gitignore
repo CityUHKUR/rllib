@@ -1,0 +1,7 @@
+.idea/**
+**/*.pth
+**/logs
+gmon.out
+**/ckpt/**
+**/*.ipynb
+**/*.bak

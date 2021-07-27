@@ -2,8 +2,6 @@ import os
 import logging
 import time
 
-import tensorflow as tf
-
 logger = logging.getLogger(__name__)
 
 

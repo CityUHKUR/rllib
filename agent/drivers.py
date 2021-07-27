@@ -443,3 +443,11 @@ class CuriosityAgent(nn.Module):
         # self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, mode='exp_range', base_lr=1e-8, max_lr=self.lr,
         #                                                    step_size_up=50)
         return self._apply(lambda t: t.cuda(device))
+
+
+
+class Model:
+    def __init__(self):
+        self.use_cuda = torch.cuda.is_available()
+        if self.use_cuda:
+            self.net = self.net.to(device="cuda")

@@ -105,8 +105,8 @@ def upsample2D(in_channels,
     if apply_dropout:
         dropout = nn.Dropout2d(p=dropout)
         return nn.Sequential(conv,
-                             activation,
                              batchnorm,
+                             activation,
                              dropout)
 
     else:
@@ -194,7 +194,8 @@ def LateralConnect2D(upsample2D,
                      downsample2D,
                      filters):
     channels = upsample2D.view(upsample2D.size(0), -1)
-    result = torch.add(upsample2D, nn.Conv2d(channels, filters, 1, (1, 1))(downsample2D))
+    result = torch.add(upsample2D, nn.Conv2d(
+        channels, filters, 1, (1, 1))(downsample2D))
 
     result = nn.Conv2D(channels, filters, 1, (1, 1))(result)
 
@@ -205,7 +206,8 @@ def LateralConnect3D(upsample3D,
                      downsample3D,
                      filters):
     channels = upsample3D.view(upsample3D.size(0), -1)
-    result = torch.add(upsample3D, nn.Conv3d(channels, filters, 1, (1, 1, 1))(downsample3D))
+    result = torch.add(upsample3D, nn.Conv3d(
+        channels, filters, 1, (1, 1, 1))(downsample3D))
 
     result = nn.Conv3d(channels, filters, 1, (1, 1, 1))(result)
 
