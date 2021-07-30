@@ -1,6 +1,11 @@
 import numpy as np
 import torch
 import cv2 as cv
+import torchvision.transforms.functional as TF
+from torchvision.transforms import ColorJitter,RandomApply,Compose, \
+    RandomHorizontalFlip,RandomAutocontrast,adjust_gamma,adjust_hue, \
+        RandomAdjustSharpness, GaussianBlur
+
 
 # FGSM attack code
 
@@ -24,3 +29,4 @@ def gaussian_attack(image, epsilon=0.5):
 
 def light_attack(image, alpha=1.0, beta=20.0):
     return np.clip(cv.convertScaleAbs(image, alpha=alpha, beta=beta), 0, 255)
+

@@ -9,4 +9,24 @@ def weights_init(m):
         nn.init.normal_(m.weight.data, 0.0, 0.02)
     elif classname.find('BacthNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
+
+
+def isin(x, list):
+    for i in list:
+        if x == i:
+            return True
+
+
+@torch.no_grad()
+def init_conv(m):
+    print(m)
+    if isin(type(m), [nn.Conv1d, nn.Conv2d, nn.Conv3d]):
+        nn.init.xavier_uniform_(m.weight.data)
+        # nn.init.xavier_uniform_(m.bias.data)
+
+
+@torch.no_grad()
+def init_linear(m):
+    print(m)
+    if isin(type(m), [nn.Linear]):
+        nn.init.xavier_uniform_(m.weight.data)

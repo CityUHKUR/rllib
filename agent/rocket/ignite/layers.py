@@ -7,37 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def chain(input, layers):
-    x = input
-    for layer in layers:
-        x = layer(x)
-    return x
 
 
-def isin(x, sets):
-    return reduce(lambda l, r: l or r, map(lambda elem: x == elem, sets))
 
 
-@torch.no_grad()
-def apply_functions(layer, target_models, funcs):
-    if isin(type(layer), target_models):
-        for func in funcs:
-            func(layer)
-
-
-@torch.no_grad()
-def init_conv(m):
-    print(m)
-    if isin(type(m), [nn.Conv1d, nn.Conv2d, nn.Conv3d]):
-        nn.init.xavier_uniform_(m.weight.data)
-        # nn.init.xavier_uniform_(m.bias.data)
-
-
-@torch.no_grad()
-def init_linear(m):
-    print(m)
-    if isin(type(m), [nn.Linear]):
-        nn.init.xavier_uniform_(m.weight.data)
 
 
 def downsample2D(in_channels,
@@ -67,8 +40,9 @@ def downsample2D(in_channels,
                                    eps=1e-5,
                                    track_running_stats=track_running_stats)
         return nn.Sequential(conv,
+                             batchnorm,
                              activation,
-                             batchnorm)
+                             )
     else:
         return nn.Sequential(conv,
                              activation)

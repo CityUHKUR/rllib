@@ -286,6 +286,11 @@ class ExperienceBuffer(object):  # stored as ( s, a, r, s_ ) in Experience Buffe
         return len(self.memory)
 
 
+""" 
+Priotize Experience Replay
+"""
+
+
 @dataclass(order=True)
 class Experience:
     priority: float
@@ -301,12 +306,7 @@ class ReplayBuffer(object):
         self.counter = itertools.count()
         self.size = 0
 
-    def store(self, item, priority=0):
-        self.buffer.append(Experience(item, priority))
-        if len(self.buffer) > self.capacity:
-            self.buffer.pop(0)
-
-    def add(self, item, priority=0) -> None:
+    def store(self, item, priority=0) -> None:
         # using counter as tierbreaker for equal priorities consideration
         count = next(self.counter)
         entry = Experience(priority, count, item)
@@ -322,4 +322,4 @@ class ReplayBuffer(object):
 
     def samples(self, num_samples):
         heapify(self.buffer)
-        return nlargest(num_samples, self.buffer)
+        return [exp.item for exp in nlargest(num_samples, self.buffer)]
