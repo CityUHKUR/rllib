@@ -1,16 +1,11 @@
 from functools import reduce
+from collections import OrderedDict
 
 
 # PyTorch Library
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-
-
-
-
 
 
 def downsample2D(in_channels,
@@ -24,28 +19,30 @@ def downsample2D(in_channels,
                  activation=nn.ELU(),
                  groups=1,
                  apply_batchnorm=True,
+                 dropout=0.5,
+                 apply_dropout=True,
                  track_running_stats=True):
-    conv = nn.Conv2d(in_channels,
-                     out_channels,
-                     kernel_size,
-                     stride=strides,
-                     padding=padding,
-                     dilation=dilation,
-                     groups=groups,
-                     bias=bias,
-                     padding_mode=padding_mode)
+
+    modules = []
+    modules.append(nn.Conv2d(in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=strides,
+                             padding=padding,
+                             dilation=dilation,
+                             groups=groups,
+                             bias=bias,
+                             padding_mode=padding_mode))
 
     if apply_batchnorm:
-        batchnorm = nn.BatchNorm2d(out_channels,
-                                   eps=1e-5,
-                                   track_running_stats=track_running_stats)
-        return nn.Sequential(conv,
-                             batchnorm,
-                             activation,
-                             )
-    else:
-        return nn.Sequential(conv,
-                             activation)
+        modules.append(nn.BatchNorm2d(out_channels,
+                                      eps=1e-5,
+                                      track_running_stats=track_running_stats))
+    modules.append(activation)
+    if apply_dropout:
+        modules.append(nn.Dropout2d(p=dropout))
+
+    return nn.Sequential(*modules)
 
 
 def upsample2D(in_channels,

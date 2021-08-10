@@ -1,7 +1,7 @@
 # Import simulation Env
 # %%
 from collections import deque  # Ordered collection with ends
-from datetime import datetime  # Help us logging time
+import datetime  # Help us logging time
 import environments
 import gym
 from gym.envs.registration import register
@@ -16,10 +16,12 @@ from rocket import ignite, images
 import torch.optim as optim
 from torchvision.transforms import Resize
 from rocket.ignite.types import Transition
+from pathlib import Path
+from rocket.utils.logging import MetricLogger
 
 from rocket.images.preprocess import stack_frames
-from rocket.utils.exprience import ReplayBuffer
-from rocket.ignite.models import Encoder, Actor, Critic, Forward, Inverse, Policy, Agent
+from rocket.utils.exprience import SequentialBuffer
+from rocket.ignite.models import Encoder, Mlp, Actor, Critic, Forward, Inverse, Policy, Agent
 from rocket.ignite.initializers import init_conv, init_linear
 from torch.utils.tensorboard import SummaryWriter
 
@@ -55,8 +57,9 @@ def make_batch(env, model, episodes, memory, config):
     gamma = config['gamma']
     explore_rate = config['explore_rate']
     batch_size = config['batch_size']
+    logger = config['logger']
 
-    episode_num = 1
+    episode_num = 0
     episodes_rewards = deque([])
     run_steps = 1
 
@@ -64,17 +67,18 @@ def make_batch(env, model, episodes, memory, config):
 
     state = env.reset()  # Get a new state
 
-    states = deque([])
-    rewards = deque([])
-    rewards_to_gos = deque([])
-    actions = deque([])
-    next_states = deque([])
-    logprobs = deque([])
+    # states = deque([])
+    # rewards = deque([])
+    # rewards_to_gos = deque([])
+    # actions = deque([])
+    # next_states = deque([])
+    # logprobs = deque([])
 
     rewards_of_episode = 0
-    state = torch.as_tensor(state).moveaxis(-1, 0)
-    state = Resize((state_size[-2], state_size[-1])
-                   )(state).float()
+    state = torch.tensor(state)
+    # state = torch.as_tensor(state).moveaxis(-1, 0)
+    # state = Resize((state_size[-2], state_size[-1])
+    #                )(state).float()
     while True:
         # Run State Through Policy & Calculate Action
 
@@ -85,30 +89,34 @@ def make_batch(env, model, episodes, memory, config):
         with torch.no_grad():
             prob = model.policy(
                 state.to(device=device, dtype=torch.float)
-                .reshape(
-                    1, *state_size))
+                # .reshape(
+                #     1, *state_size)
+            )
 
-        if np.random.randn() < explore_rate:
+        # if np.random.randn() < explore_rate:
 
-            action = prob.sample()  # select action w.r.t the actionss prob
-        else:
-            action = torch.as_tensor(
-                np.random.choice(action_size)).unsqueeze(0)
+        action = prob.sample()  # select action w.r.t the actionss prob
+        # else:
+        #     action = torch.as_tensor(
+        #         np.random.choice(action_size)).unsqueeze(0)
 
         # Perform action
-        next_state, reward, done, _ = env.step(action)
+        next_state, reward, done, _ = env.step(action.item())
         # env.render()
-        next_state = torch.as_tensor(next_state).moveaxis(-1, 0)
-        next_state = Resize(
-            (state_size[-2], state_size[-1]))(next_state).float()
+        next_state = torch.tensor(next_state)
+        # next_state = torch.as_tensor(next_state).moveaxis(-1, 0)
+        # next_state = Resize(
+        #     (state_size[-2], state_size[-1]))(next_state).float()
         rewards_of_episode = gamma * rewards_of_episode + reward
         # # Store results
-        states.append(state)
-        actions.append(action)
-        rewards_to_gos.append(0)
-        rewards.append(reward)
-        next_states.append(next_state)
-        logprobs.append(prob.log_prob(action))
+        # states.append(state)
+        # actions.append(action)
+        # rewards_to_gos.append(0)
+        # rewards.append(reward)
+        # next_states.append(next_state)
+        # logprobs.append(prob.log_prob(action))
+        memory.add(Transition(state, action, torch.as_tensor(reward), 0,
+                   next_state, prob.log_prob(action)))
 
         if done:
             # The episode ends so no next state
@@ -129,21 +137,23 @@ def make_batch(env, model, episodes, memory, config):
                 break
 
             # Store Episodes into memory
-            n = len(rewards_to_gos)
-            for i in reversed(range(n)):
-                rewards_to_gos[i] = rewards[i] + \
-                    gamma * (rewards_to_gos[i + 1] if i + 1 < n else 0)
+            # n = len(rewards_to_gos)
+            # for i in reversed(range(n)):
+            #     rewards_to_gos[i] = rewards[i] + \
+            #         gamma * (rewards_to_gos[i + 1] if i + 1 < n else 0)
 
-            store_episode(model, memory, list(states), list(actions), list(rewards), list(rewards_to_gos), list(next_states),
-                          list(logprobs))
+            # store_episode(model, memory, list(states), list(actions), list(rewards), list(rewards_to_gos), list(next_states),
+            #               list(logprobs))
+
+            memory.pack_episodes()
 
             # Reset the transition stores
-            states = deque([])
-            rewards = deque([])
-            rewards_to_gos = deque([])
-            actions = deque([])
-            next_states = deque([])
-            logprobs = deque([])
+            # states = deque([])
+            # rewards = deque([])
+            # rewards_to_gos = deque([])
+            # actions = deque([])
+            # next_states = deque([])
+            # logprobs = deque([])
             #########
             # Episode base
             #########
@@ -155,10 +165,11 @@ def make_batch(env, model, episodes, memory, config):
 
             # Start a new episode
             state = env.reset()
-            state = torch.as_tensor(state).moveaxis(-1, 0)
+            state = torch.tensor(state)
+            # state = torch.as_tensor(state).moveaxis(-1, 0)
 
-            state = Resize((state_size[-2], state_size[-1])
-                           )(state).float()
+            # state = Resize((state_size[-2], state_size[-1])
+            #                )(state).float()
 
         else:
             # If not done, the next_state become the current state
@@ -170,27 +181,22 @@ def make_batch(env, model, episodes, memory, config):
     return episodes_rewards
 
 
+def unpack(data):
+    return [*zip(*data)]
+
+
+def pack(data, type):
+    return type(*zip(*data))
+
+
 def make_mini_batch(data, batch_size, mini_batch_size):
     mini_batch = []
     sample_number = int(batch_size / mini_batch_size)
     for (start_idx, end_idx) in zip(np.linspace(0, batch_size - mini_batch_size, sample_number, endpoint=True),
                                     np.linspace(mini_batch_size, batch_size, sample_number, endpoint=True)):
-        mini_batch.append([mini_data[int(start_idx):int(end_idx)]
-                          for mini_data in data])
+        mini_batch.append(data[int(start_idx):int(end_idx)])
 
     return mini_batch
-
-
-def transitions_to_batch(transitions):
-    # to Transition of batch-arrays.
-    batch = Transition(*zip(*transitions))
-    states_mb = batch.state
-    actions_mb = batch.action
-    rewards_mb = batch.reward
-    reward_to_go_mb = batch.reward_to_go
-    next_states_mb = batch.next_state
-    logp_mb = batch.logp
-    return states_mb, actions_mb, rewards_mb, reward_to_go_mb, next_states_mb, logp_mb
 
 
 def store_episode(model, memory, states, actions, rewards, rewards_to_gos, next_states, logps):
@@ -209,14 +215,6 @@ def store_episode(model, memory, states, actions, rewards, rewards_to_gos, next_
                                  logp.clone().detach().requires_grad_(True).to(dtype=torch.float))
         memory.store(Transition(s, a, r, rg, st, logp
                                 ), model.intrinsic_reward(s.unsqueeze(0), st.unsqueeze(0), a))
-
-
-def calculate_gradient(model, optimizer, states, actions, rewards, next_states, logps, gamma):
-    return 0
-
-
-def train(model, memory, batch_size):
-    return 0
 
 
 def evaluate(model, env, config, num_episodes=3):
@@ -253,11 +251,17 @@ def evaluate(model, env, config, num_episodes=3):
 
 # %%
 if __name__ == "__main__":
-    env_list = {'Breakout': 'Breakout-v0', 'DeepRacer': 'DeepRacer-v1'}
-    game_env = 'Breakout'
+    env_list = {'Breakout': 'Breakout-v0',
+                'DeepRacer': 'DeepRacer-v1', 'CartPole': 'CartPole-v1'}
+    game_env = 'CartPole'
     env = gym.make(env_list[game_env])
     env = env.unwrapped
-    # %%
+
+    save_dir = Path(
+        "ckpt")/datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")    # %%
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_point = save_dir / "{}+ppo.pt".format(game_env)
+    writer = SummaryWriter(save_dir)
     ################################
     #
     #   Initialize training hyperparameters
@@ -273,31 +277,31 @@ if __name__ == "__main__":
 
     # TRAINING HYPERPARAMETERS
     learning_rate = 1e-3
-    max_episodes = 15
-    min_episodes = 3  # Total episodes for sampling
+    max_episodes = 5
     explore_rate = 0.5
     min_explore_rate = 0.05
     explore_decay_rate = 0.95
     explore_decay_step = 50
-    gamma = 0.999  # Discounting rate
+    gamma = 0.995  # Discounting rate
     min_clip_value = -1
     max_clip_value = 1
     # Starting Epoch
     epoch = 0  # tune this > 51 to reduce exploration rate
-    batch_size = 128 * 2  # Each 1 is AN EPISODE
+    batch_size = 128  # Each 1 is AN EPISODE
     mini_batch_size = 64
 
-    writer = SummaryWriter('logs/DeepRacer-v1')
+    logger = MetricLogger(save_dir)
 
     config = {'state_size': state_size,
               'action_size': action_size,
               'learning_rate': learning_rate,
               'max_episodes': max_episodes,
-              'min_episodes': min_episodes,
               'gamma': gamma,
+              'lambda': 0.95,
               'explore_rate': explore_rate,
               'explore_decay_rate': explore_decay_rate,
-              'batch_size': batch_size
+              'batch_size': batch_size,
+              'logger': logger
               }
 
     # MODIFY THIS TO FALSE IF YOU JUST WANT TO SEE THE TRAINED AGENT
@@ -318,7 +322,6 @@ if __name__ == "__main__":
 
     # Create Save checkpoint
 
-    save_point = "./ckpt/{}+ppo.pt".format(game_env)
     if not os.path.exists(save_point):
         with open(save_point, "w+") as f:
             f.close()
@@ -329,8 +332,9 @@ if __name__ == "__main__":
         # change the model to float32
     """
 
-    feature_size = 128
-    encoder = Encoder() \
+    feature_size = 64
+    mlp = Mlp(env.observation_space.shape[0], feature_size)
+    encoder = Encoder(feature_size) \
         .to(device=device) \
         .apply(init_conv)
     policy_network = Policy(feature_size) \
@@ -354,7 +358,7 @@ if __name__ == "__main__":
         .apply(init_linear) \
         .float() \
 
-    model = Agent(encoder, policy_network,
+    model = Agent(mlp, policy_network,
                   actor, critic, intrinsic, extrinsic) \
         .to(device=device) \
         .apply(init_linear) \
@@ -385,21 +389,9 @@ if __name__ == "__main__":
     regiter hook for gradient clamping
     """
 
-    for p in model.parameters():
-        p.register_hook(lambda grad: torch.clamp(
-            grad, min_clip_value, max_clip_value))
     # restore saved model if available
-    if not os.stat(save_point).st_size == 0:
-        checkpoint = torch.load(save_point, map_location=device)
 
-        agent_state_dict = checkpoint['agent_state_dict']
-        model.load_state_dict(
-            agent_state_dict, strict=False)
-        optimizer.load_state_dict(
-            checkpoint['optimizer_state_dict'])
-        epoch = checkpoint['epoch']
-
-    memory = ReplayBuffer(500)
+    memory = SequentialBuffer(max_episodes, config['gamma'], config['lambda'])
     # episode base
     # memory = ExperienceBuffer(10)
 
@@ -420,75 +412,106 @@ if __name__ == "__main__":
     # Define Summary Metrics
 
     print("[INFO] START TRAINING")
+epoch = 1
+
+training = True
+while training:
+    print("==========================================")
+    print("Epoch: ", epoch)
+    # Gather training data
+    model.train()
+    print("==========================================")
+    print("Agent start Playing")
+    print("==========================================")
+    episodes_rewards = make_batch(env, model, max_episodes, memory,
+                                  config)
+
+    # These part is used for analytics
+    # Calculate the total reward ot the batch
+
+    # Calculate the mean reward of the batch
+
+    # Calculate the average reward of all training
+
+    # Calculate maximum reward recorded
+    # maximumRewardRecorded = np.amax(allRewards)
+
+    print("-----------")
+    print("Number of training episodes: {}".format(len(episodes_rewards)))
+    print("Rewards over the epoch: {}".format(np.mean(episodes_rewards)))
+    mean_reward = []
+    mean_loss = []
+    # trainning step
+    # model.zero_grad()
+    optimizer.zero_grad()
+    # Feedforward, gradient and backpropagation
+    step = 0
+
+    eps = unpack(memory.samples())
+    for mini_batch in make_mini_batch(
+            eps,
+            len(eps),
+            min(len(eps), mini_batch_size)):
+
+        mb = pack(mini_batch, Transition)
+        print(mb)
+        states_mb = torch.stack(mb.state).to(
+            device=device, dtype=torch.float)
+        actions_mb = torch.stack(mb.action).to(
+            device=device, dtype=torch.long).unsqueeze(-1)
+        rewards_mb = torch.stack(mb.reward).to(
+            device=device, dtype=torch.float).unsqueeze(-1)
+        reward_to_gos_mb = torch.stack(mb.reward_to_go).to(
+            device=device, dtype=torch.float).unsqueeze(-1)
+        next_states_mb = torch.stack(mb.next_state).to(
+            device=device, dtype=torch.float)
+        logps_mb = torch.stack(mb.logp).to(
+            device=device, dtype=torch.float).unsqueeze(-1)
+
+        # states_mb = torch.stack(mb.state).pin_memory().to(
+        #     device=device, non_blocking=True)
+        # actions_mb = torch.stack(mb.action).pin_memory().to(
+        #     device=device, non_blocking=True).unsqueeze(-1)
+        # rewards_mb = torch.stack(mb.reward).pin_memory().to(
+        #     device=device, non_blocking=True).unsqueeze(-1)
+        # reward_to_gos_mb = torch.stack(mb.reward_to_go).pin_memory().to(
+        #     device=device, non_blocking=True).unsqueeze(-1)
+        # next_states_mb = torch.stack(mb.next_state).pin_memory().to(
+        #     device=device, non_blocking=True)
+        # logps_mb = torch.stack(mb.logp).pin_memory().to(
+        #     device=device, non_blocking=True).unsqueeze(-1)
+
+        small_batch = (states_mb, actions_mb, rewards_mb,
+                       reward_to_gos_mb, next_states_mb, logps_mb)
+
+        loss = model.loss(small_batch)
+        loss.backward()
+        for p in model.parameters():
+            torch.nn.utils.clip_grad_norm_(
+                p, 2.0)
+        mean_reward.append(np.sum(rewards_mb.detach().cpu().numpy()))
+        mean_loss.append(loss.detach().cpu().numpy())
+
+    optimizer.step()
+    optimizer.zero_grad()
+
+    print("Total reward: {}".format(np.mean(mean_reward)))
+    print("Training Loss: {}".format(np.mean(mean_loss)))
+
+    writer.add_scalar('loss', np.mean(mean_loss), epoch)
+    writer.add_scalar('reward', np.mean(mean_reward), epoch)
+
+    # write summary to files
+
+    # save checkpoint
+    if epoch % 10 == 0:
+        torch.save({
+            'epoch':                                epoch,
+            'agent_state_dict':           model.state_dict(),
+            'optimizer_state_dict':                 optimizer.state_dict(),
+        }, save_point)
+
     epoch += 1
-    episodes = 15
-
-    while training:
-        print("==========================================")
-        print("Epoch: ", epoch)
-        # Gather training data
-        model.train()
-        print("==========================================")
-        print("Agent start Playing")
-        print("==========================================")
-        episodes_rewards = make_batch(env, model, episodes, memory,
-                                      config)
-
-        # These part is used for analytics
-        # Calculate the total reward ot the batch
-
-        # Calculate the mean reward of the batch
-
-        # Calculate the average reward of all training
-
-        # Calculate maximum reward recorded
-        # maximumRewardRecorded = np.amax(allRewards)
-
-        print("-----------")
-        print("Number of training episodes: {}".format(len(episodes_rewards)))
-        print("Rewards over the epoch: {}".format(np.mean(episodes_rewards)))
-
-        # Feedforward, gradient and backpropagation
-
-        mean_loss = []
-        mean_total_reward = []
-        mean_entropy = []
-        mini_batch = transitions_to_batch(memory.samples(mini_batch_size))
-
-        states_mb, actions_mb, rewards_mb, reward_to_gos_mb, next_states_mb, logps_mb = mini_batch
-        mini_batch = torch.stack(states_mb), torch.stack(actions_mb).unsqueeze(-1), torch.stack(rewards_mb).unsqueeze(
-            -1), torch.stack(reward_to_gos_mb).unsqueeze(-1), torch.stack(next_states_mb), torch.stack(logps_mb).unsqueeze(-1)
-
-        _, _, rewards_mb, _, _, _ = mini_batch
-
-        model.minimize(inputs=mini_batch, optimizer=optimizer)
-
-        mean_loss.append(model.loss(
-            mini_batch).detach().cpu().numpy())
-        mean_total_reward.append(np.sum(rewards_mb.detach().cpu().numpy()))
-
-        print("Total reward: {}".format(
-            np.mean(mean_total_reward)))
-        print("Training Loss: {}".format(np.mean(mean_loss)))
-
-        # write summary to files
-
-        # save checkpoint
-        if epoch % 10 == 0:
-            torch.save({
-                'epoch':                                epoch,
-                'agent_state_dict':           model.state_dict(),
-                'optimizer_state_dict':                 optimizer.state_dict(),
-            }, save_point)
-
-            print('--------------------')
-            print('Evaluation Process')
-            print("Overall Rewards of the gameplay: {}".format(
-                evaluate(model, env, config)))
-
-        epoch += 1
-        episodes = int(max_episodes * np.exp(-epoch *
-                                             gamma / 30)) + min_episodes
-        config['explore_rate'] = explore_rate * explore_decay_rate ** epoch
+    config['explore_rate'] = explore_rate * explore_decay_rate ** epoch
 
 # %%

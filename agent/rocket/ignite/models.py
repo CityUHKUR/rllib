@@ -5,6 +5,7 @@ from rocket.images.preprocess import stack_frames
 import torchviz
 from torchsummary import summary
 from torchvision.transforms import Resize, InterpolationMode
+import scipy
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
@@ -16,11 +17,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Encoder(nn.Module):
-    def __init__(self):
+    def __init__(self, output_size):
         super(Encoder, self).__init__()
         self.downs = [
             downsample2D(3, 32, [4, 4], [2, 2], padding=[
-                         1, 1], apply_batchnorm=False),  # (bs, 4, 128, 128, 64)
+                         1, 1], apply_dropout=False, apply_batchnorm=False),  # (bs, 4, 128, 128, 64)
             nn.MaxPool2d((2)),
             downsample2D(32, 64, [4, 4], [2, 2], padding=[
                          1, 1]),  # (bs, 4, 64, 64, 128)
@@ -30,14 +31,13 @@ class Encoder(nn.Module):
             nn.MaxPool2d((2)),
             downsample2D(128, 256, [4, 4], [2, 2], padding=[
                          1, 1]),  # (bs, 4, 4, 32, 256)
-            nn.MaxPool2d((2), padding=1),
-            downsample2D(256, 512, [4, 4], [2, 2], padding=[
-                         1, 1], apply_batchnorm=False),  # (bs, 4, 4, 32, 256)
-            # downsample2D(512, 512, [ 4, 4], [ 1, 1], padding=[0,0]),  # (bs, 4, 4, 32, 256)
-
+            nn.AdaptiveMaxPool2d((5, 5)),
+            downsample2D(256, 512, [5, 5], [
+                         1, 1], padding='valid', apply_dropout=False, apply_batchnorm=False),
         ]
+        self.fc = nn.Linear(512, output_size)
         self.model = nn.Sequential(*self.downs,
-                                   nn.Flatten())
+                                   nn.Flatten(), self.fc, nn.ReLU(True))
 
     def forward(self, x):
         x = self.model(x)
@@ -85,6 +85,23 @@ class Decoder(nn.Module):
         x = self.model(x)
         x = Resize(self.output_size,
                    interpolation=InterpolationMode.NEAREST)(x)
+        return x
+
+
+class Mlp(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(Mlp, self).__init__()
+        self.downs = [
+            nn.Linear(input_size, input_size*2),
+            nn.ReLU(True),
+            nn.Linear(input_size*2, input_size*4),
+            nn.ReLU(True)
+        ]
+        self.fc = nn.Linear(input_size*4, output_size)
+        self.model = nn.Sequential(*self.downs, self.fc, nn.ReLU(True))
+
+    def forward(self, x):
+        x = self.model(x)
         return x
 
 
@@ -189,9 +206,9 @@ class Policy(nn.Module):
         self.feature_size = feature_size
         self.model = nn.Sequential(*[
             nn.Linear(feature_size, feature_size*4),
-            nn.ReLU(True),
+            nn.Tanh(),
             nn.Linear(feature_size*4, feature_size*2),
-            nn.ReLU(True),
+            nn.Tanh(),
         ])
         self.last_layer_size = feature_size*2
 
@@ -216,7 +233,7 @@ class Actor(nn.Module):
         assert policy_network.last_layer_size == input_layer_size
 
         self.model = nn.Sequential(*[nn.Linear(input_layer_size, feature_size),
-                                     nn.ReLU(True),
+                                     nn.Tanh(),
                                      nn.Linear(feature_size, action_size),
                                      nn.Tanh()
                                      ])
@@ -249,8 +266,7 @@ class Critic(nn.Module):
         self.model = nn.Sequential(*[
             nn.Linear(input_layer_size, feature_size),
             nn.ReLU(True),
-            nn.Linear(feature_size, 1),
-            nn.ELU()
+            nn.Linear(feature_size, 1)
         ])
 
     def forward(self, state_feature):
@@ -264,7 +280,8 @@ class Critic(nn.Module):
         # Expected features input instead of Raw image
         # Calculate the  feature difference
         x = self.forward(state_feature)
-        loss = nn.SmoothL1Loss(reduction='mean')(x, rewards_to_go)
+        loss = nn.MSELoss(reduction='mean')(
+            x, rewards_to_go)
         return loss
 
 # %%
@@ -277,7 +294,7 @@ class Agent(nn.Module):
     """
 
     def __init__(self, feature_extractor, policy_network, actor, critic,  intrinsic, extrinsic, lr=1.001, scaling_factor=0.8, epsilon=0.2,
-                 entropy_limit=99):
+                 entropy_limit=99, offset=1e-9, gamma=0.995, lamb=0.98):
         super(Agent, self).__init__()
         self.lr = lr
         self.epsilon = epsilon
@@ -289,6 +306,9 @@ class Agent(nn.Module):
         self.feature_extractor = feature_extractor
         self.extrinsic = extrinsic
         self.intrinsic = intrinsic
+        self.offset = 1e-9
+        self.gamma = gamma
+        self.lamb = lamb
 
     def forward(self, state):
         # Expected features input instead of Raw image
@@ -303,6 +323,9 @@ class Agent(nn.Module):
         x = self.actor.policy(x)
         return x
 
+    def discount_cumsum(self, x, discount):  # discount experience
+        return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+
     def loss(self, inputs, algo="PPO"):
         states, actions, rewards, reward_to_gos, next_states, logp_old = inputs
         features, next_features = self.feature_extractor(
@@ -312,15 +335,29 @@ class Agent(nn.Module):
             curiosity = self.intrinsic.loss(
                 features, next_features, actions.squeeze())
             dynamics = self.extrinsic.loss(features, next_features, actions)
-            td_errors = self.critic.loss(
-                features, reward_to_gos)
-            value = self.critic.forward(features)
-            advantages = value - rewards
-            logp = self.policy(states).log_prob(actions)
-            ratio = torch.exp(logp - logp_old)
-            clip_ratio = torch.clamp(ratio, 0 - self.epsilon, 1 + self.epsilon)
-            _loss = -torch.mean(torch.minimum(ratio, clip_ratio) * advantages) + (
-                td_errors+self.scaling_factor * curiosity + (0 - self.scaling_factor) * dynamics)
+            v_s, v_ss = self.critic.forward(
+                features), self.critic.forward(next_features)
+            delta = rewards + self.gamma * v_ss - v_s
+
+            v_loss = self.critic.loss(features, reward_to_gos)
+
+            advantages = torch.as_tensor(self.discount_cumsum(
+                delta.detach().numpy(), self.gamma * self.lamb).copy())
+            adv_std, adv_mean = torch.std_mean(advantages)
+            adv = (advantages - adv_mean) / adv_std
+
+            pi = self.policy(states)
+            logp = pi.log_prob(actions)
+            entropy = pi.entropy()
+
+            ratio = torch.exp(logp - logp_old) * adv
+
+            clip_ratio = torch.clamp(
+                ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
+            _loss = - (torch.mean(torch.minimum(ratio, clip_ratio)) + 0.01 * entropy.mean() - 0.5 *
+                       # - self.scaling_factor * curiosity - (0 - self.scaling_factor) * dynamics
+                       v_loss
+                       )
             return _loss
 
     def intrinsic_reward(self, states, next_states, actions):
@@ -340,3 +377,4 @@ class Agent(nn.Module):
             _loss.backward()
             return _loss
         optimizer.step(closure)
+        return self.loss(inputs)

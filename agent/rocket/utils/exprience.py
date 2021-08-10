@@ -1,11 +1,14 @@
 from collections import deque
 from heapq import heappush, heapreplace, nlargest, heapify
 import itertools
-
+import torch
+import scipy.signal
 from dataclasses import dataclass, field
 from typing import Any
 # import tensorflow as tf  # Deep Learning
 import numpy as np
+from functools import reduce
+from rocket.ignite.types import Transition
 
 
 class SumTree(object):
@@ -262,7 +265,7 @@ class ExperienceBuffer(object):  # stored as ( s, a, r, s_ ) in Experience Buffe
 
     def store(self, experience, priority):
         self.memory.append(experience)
-        self.priority.append(priority)
+        self.priority.append(priority.detach().cpu())
         self.position = (self.position + 1) % self.capacity
 
     def count(self):  # number of experience stored
@@ -273,14 +276,48 @@ class ExperienceBuffer(object):  # stored as ( s, a, r, s_ ) in Experience Buffe
             np.abs(prob), randomness), self.priority))
         return np.divide(reg_pro, np.sum(reg_pro))
 
-    def sample(self, batch, randomness=0.5):
-        return (
-            list(map(lambda index: self.memory[index],
-                     np.random.choice(
-                self.count(),
-                batch,
-                p=self.weight(randomness=randomness)))),
-            self.weight)
+    def samples(self, batch_size, randomness=0.5):
+        return list(map(lambda index: self.memory[index],
+                        np.random.choice(
+            self.count(),
+            batch_size,
+            p=self.weight(randomness=randomness))))
+
+    def __len__(self):
+        return len(self.memory)
+
+
+class SequentialBuffer(object):  # stored as ( s, a, r, s_ ) in Experience Buffer
+    def __init__(self, capacity, gamma, lamb):
+        self.capacity = capacity
+        self.memory = deque([])
+        self.episodes = deque([], maxlen=capacity)
+        self.position = 0
+        self.gamma = gamma
+        self.lamb = lamb
+
+    def count(self):  # number of experience stored
+        return len(self.episodes)
+
+    def add(self, transistion):  # add experience
+        self.memory.append(transistion)
+        self.position = (self.position + 1) % self.capacity
+
+    def discount_cumsum(self, x, discount):  # discount experience
+        return scipy.signal.lfilter([1], [1, -discount], x[::-1], axis=0)[::-1]
+
+    def pack_episodes(self):  # pack episodes
+        s, a, r, _, st, logp = [*zip(*self.memory)]
+        rg = self.discount_cumsum(r, self.gamma).copy()
+        self.episodes.append(Transition(
+            s, a, r, torch.as_tensor(rg), st, logp))
+        self.memory.clear()
+
+    def samples(self):
+        eps = [reduce(lambda x, y: torch.cat((x, y), 0), t)
+               for t in zip(*self.episodes)]
+        print(eps)
+        return eps
 
     def __len__(self):
         return len(self.memory)
