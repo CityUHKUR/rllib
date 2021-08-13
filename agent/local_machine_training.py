@@ -115,7 +115,7 @@ def make_batch(env, model, episodes, memory, config):
         # rewards.append(reward)
         # next_states.append(next_state)
         # logprobs.append(prob.log_prob(action))
-        memory.add(Transition(state, action, torch.as_tensor(reward), 0,
+        memory.add(Transition(state, action, torch.as_tensor(reward/10), 0,
                    next_state, prob.log_prob(action)))
 
         if done:
@@ -288,7 +288,7 @@ if __name__ == "__main__":
     # Starting Epoch
     epoch = 0  # tune this > 51 to reduce exploration rate
     batch_size = 128  # Each 1 is AN EPISODE
-    mini_batch_size = 64
+    mini_batch_size = 32
 
     logger = MetricLogger(save_dir)
 
@@ -332,8 +332,10 @@ if __name__ == "__main__":
         # change the model to float32
     """
 
-    feature_size = 64
-    mlp = Mlp(env.observation_space.shape[0], feature_size)
+    feature_size = 128
+    mlp = Mlp(env.observation_space.shape[0], feature_size)\
+        .apply(init_linear) \
+        .float()
     encoder = Encoder(feature_size) \
         .to(device=device) \
         .apply(init_conv)
@@ -391,7 +393,8 @@ if __name__ == "__main__":
 
     # restore saved model if available
 
-    memory = SequentialBuffer(max_episodes, config['gamma'], config['lambda'])
+    memory = SequentialBuffer(
+        max_episodes, config['gamma'], config['lambda'])
     # episode base
     # memory = ExperienceBuffer(10)
 
@@ -447,54 +450,53 @@ while training:
     # Feedforward, gradient and backpropagation
     step = 0
 
-    eps = unpack(memory.samples())
-    for mini_batch in make_mini_batch(
-            eps,
-            len(eps),
-            min(len(eps), mini_batch_size)):
+    for eps in memory.samples():
+        eps_mb = unpack(eps)
+        for mini_batch in make_mini_batch(
+                eps_mb,
+                len(eps_mb),
+                min(len(eps_mb), mini_batch_size)):
 
-        mb = pack(mini_batch, Transition)
-        print(mb)
-        states_mb = torch.stack(mb.state).to(
-            device=device, dtype=torch.float)
-        actions_mb = torch.stack(mb.action).to(
-            device=device, dtype=torch.long).unsqueeze(-1)
-        rewards_mb = torch.stack(mb.reward).to(
-            device=device, dtype=torch.float).unsqueeze(-1)
-        reward_to_gos_mb = torch.stack(mb.reward_to_go).to(
-            device=device, dtype=torch.float).unsqueeze(-1)
-        next_states_mb = torch.stack(mb.next_state).to(
-            device=device, dtype=torch.float)
-        logps_mb = torch.stack(mb.logp).to(
-            device=device, dtype=torch.float).unsqueeze(-1)
+            mb = pack(mini_batch, Transition)
+            states_mb = torch.stack(mb.state).to(
+                device=device, dtype=torch.float)
+            actions_mb = torch.stack(mb.action).to(
+                device=device, dtype=torch.long).unsqueeze(-1)
+            rewards_mb = torch.stack(mb.reward).to(
+                device=device, dtype=torch.float).unsqueeze(-1)
+            reward_to_gos_mb = torch.stack(mb.reward_to_go).to(
+                device=device, dtype=torch.float)
+            next_states_mb = torch.stack(mb.next_state).to(
+                device=device, dtype=torch.float)
+            logps_mb = torch.stack(mb.logp).to(
+                device=device, dtype=torch.float).unsqueeze(-1)
 
-        # states_mb = torch.stack(mb.state).pin_memory().to(
-        #     device=device, non_blocking=True)
-        # actions_mb = torch.stack(mb.action).pin_memory().to(
-        #     device=device, non_blocking=True).unsqueeze(-1)
-        # rewards_mb = torch.stack(mb.reward).pin_memory().to(
-        #     device=device, non_blocking=True).unsqueeze(-1)
-        # reward_to_gos_mb = torch.stack(mb.reward_to_go).pin_memory().to(
-        #     device=device, non_blocking=True).unsqueeze(-1)
-        # next_states_mb = torch.stack(mb.next_state).pin_memory().to(
-        #     device=device, non_blocking=True)
-        # logps_mb = torch.stack(mb.logp).pin_memory().to(
-        #     device=device, non_blocking=True).unsqueeze(-1)
+            # states_mb = torch.stack(mb.state).pin_memory().to(
+            #     device=device, non_blocking=True)
+            # actions_mb = torch.stack(mb.action).pin_memory().to(
+            #     device=device, non_blocking=True).unsqueeze(-1)
+            # rewards_mb = torch.stack(mb.reward).pin_memory().to(
+            #     device=device, non_blocking=True).unsqueeze(-1)
+            # reward_to_gos_mb = torch.stack(mb.reward_to_go).pin_memory().to(
+            #     device=device, non_blocking=True).unsqueeze(-1)
+            # next_states_mb = torch.stack(mb.next_state).pin_memory().to(
+            #     device=device, non_blocking=True)
+            # logps_mb = torch.stack(mb.logp).pin_memory().to(
+            #     device=device, non_blocking=True).unsqueeze(-1)
 
-        small_batch = (states_mb, actions_mb, rewards_mb,
-                       reward_to_gos_mb, next_states_mb, logps_mb)
+            small_batch = (states_mb, actions_mb, rewards_mb,
+                           reward_to_gos_mb, next_states_mb, logps_mb)
+            with torch.autograd.set_detect_anomaly(True):
+                loss = model.loss(small_batch)
+                loss.backward(retain_graph=True)
 
-        loss = model.loss(small_batch)
-        loss.backward()
+            mean_reward.append(np.sum(reward_to_gos_mb.detach().cpu().numpy()))
+            mean_loss.append(loss.clone().detach().cpu().numpy())
         for p in model.parameters():
             torch.nn.utils.clip_grad_norm_(
                 p, 2.0)
-        mean_reward.append(np.sum(rewards_mb.detach().cpu().numpy()))
-        mean_loss.append(loss.detach().cpu().numpy())
-
-    optimizer.step()
-    optimizer.zero_grad()
-
+        optimizer.step()
+        optimizer.zero_grad()
     print("Total reward: {}".format(np.mean(mean_reward)))
     print("Training Loss: {}".format(np.mean(mean_loss)))
 

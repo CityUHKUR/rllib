@@ -11,6 +11,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.distributions.categorical import Categorical
+from itertools import accumulate
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -147,7 +148,7 @@ class Forward(nn.Module):
         return x
 
     def loss(self, state_feature, next_state_feature, actions):
-        loss = nn.SmoothL1Loss(reduction='mean')(
+        loss = nn.MSELoss(reduction='mean')(
             self.forward(state_feature, actions),
             next_state_feature)
         return loss
@@ -198,7 +199,7 @@ class Inverse(nn.Module):
 class Policy(nn.Module):
     """
         0. Decision Network
-        1. Weight Sharing 
+        1. Weight Sharing
     """
 
     def __init__(self, feature_size):
@@ -293,7 +294,7 @@ class Agent(nn.Module):
     Combine all the components together
     """
 
-    def __init__(self, feature_extractor, policy_network, actor, critic,  intrinsic, extrinsic, lr=1.001, scaling_factor=0.8, epsilon=0.2,
+    def __init__(self, feature_extractor, policy_network, actor, critic,  intrinsic, extrinsic, lr=1.001, scaling_factor=0.7, epsilon=0.2,
                  entropy_limit=99, offset=1e-9, gamma=0.995, lamb=0.98):
         super(Agent, self).__init__()
         self.lr = lr
@@ -324,7 +325,8 @@ class Agent(nn.Module):
         return x
 
     def discount_cumsum(self, x, discount):  # discount experience
-        return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+        return torch.cat(
+            list(accumulate(x.unsqueeze(-1), lambda l, r: l+r*discount)))
 
     def loss(self, inputs, algo="PPO"):
         states, actions, rewards, reward_to_gos, next_states, logp_old = inputs
@@ -341,23 +343,22 @@ class Agent(nn.Module):
 
             v_loss = self.critic.loss(features, reward_to_gos)
 
-            advantages = torch.as_tensor(self.discount_cumsum(
-                delta.detach().numpy(), self.gamma * self.lamb).copy())
+            advantages = self.discount_cumsum(
+                delta, self.gamma * self.lamb)
             adv_std, adv_mean = torch.std_mean(advantages)
-            adv = (advantages - adv_mean) / adv_std
+            adv = (advantages - adv_mean) / (adv_std + self.offset)
 
             pi = self.policy(states)
-            logp = pi.log_prob(actions)
+            logp = pi.log_prob(actions.squeeze()).unsqueeze(-1)
             entropy = pi.entropy()
-
             ratio = torch.exp(logp - logp_old) * adv
-
             clip_ratio = torch.clamp(
                 ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
-            _loss = - (torch.mean(torch.minimum(ratio, clip_ratio)) + 0.01 * entropy.mean() - 0.5 *
-                       # - self.scaling_factor * curiosity - (0 - self.scaling_factor) * dynamics
-                       v_loss
-                       )
+
+            _loss = torch.mean(torch.minimum(ratio, clip_ratio)).neg() + (0.01 * entropy.mean()).neg() + 0.5 * v_loss \
+                + self.scaling_factor * curiosity \
+                + (1 - self.scaling_factor) * dynamics
+
             return _loss
 
     def intrinsic_reward(self, states, next_states, actions):

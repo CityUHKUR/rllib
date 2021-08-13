@@ -310,14 +310,15 @@ class SequentialBuffer(object):  # stored as ( s, a, r, s_ ) in Experience Buffe
         s, a, r, _, st, logp = [*zip(*self.memory)]
         rg = self.discount_cumsum(r, self.gamma).copy()
         self.episodes.append(Transition(
-            s, a, r, torch.as_tensor(rg), st, logp))
+            s, a, r, torch.as_tensor(rg).split(1), st, logp))
         self.memory.clear()
 
+    def unpack_episodes(self):
+        return [reduce(lambda x, y: x + y, t)
+                for t in zip(*self.episodes)]
+
     def samples(self):
-        eps = [reduce(lambda x, y: torch.cat((x, y), 0), t)
-               for t in zip(*self.episodes)]
-        print(eps)
-        return eps
+        return self.episodes
 
     def __len__(self):
         return len(self.memory)
