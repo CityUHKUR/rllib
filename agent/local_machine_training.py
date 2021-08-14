@@ -494,7 +494,10 @@ while training:
             mean_loss.append(loss.clone().detach().cpu().numpy())
         for p in model.parameters():
             torch.nn.utils.clip_grad_norm_(
-                p, 2.0)
+                p, 2.5)
+        for p in model.parameters():
+            torch.nn.utils.clip_grad_value_(
+                p, 1.0)
         optimizer.step()
         optimizer.zero_grad()
     print("Total reward: {}".format(np.mean(mean_reward)))

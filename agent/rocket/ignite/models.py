@@ -356,13 +356,17 @@ class Agent(nn.Module):
             pi = self.policy(states)
             logp = pi.log_prob(actions.squeeze()).unsqueeze(-1)
             entropy = pi.entropy()
+            # print(adv)
             ratio = torch.exp(logp - logp_old) * adv
             clip_ratio = torch.clamp(
                 ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
 
-            _loss = (-torch.minimum(ratio, clip_ratio).squeeze() - (0.05 * entropy) + 0.5 * v_loss.squeeze()
-                     + 0.1 * self.scaling_factor * curiosity
-                     + 0.1 * (1 - self.scaling_factor) * dynamics).mean()
+            _loss = (
+                -torch.minimum(ratio, clip_ratio).squeeze()
+                - (0.01 * entropy) + 0.5 * v_loss.squeeze()
+                # + 0.5 * self.scaling_factor * curiosity
+                # + 0.5 * (1 - self.scaling_factor) * dynamics
+            ).mean()
 
             return _loss
 
