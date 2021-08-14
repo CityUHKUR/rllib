@@ -135,8 +135,7 @@ class Forward(nn.Module):
 
     def forward(self, feature, action):
         action_one_hot = F.one_hot(action, num_classes=self.action_size)
-        x = action_one_hot.to(dtype=torch.float)
-
+        x = action_one_hot.to(dtype=torch.float).squeeze()
         x = torch.cat((
             feature,
             x
@@ -334,18 +333,24 @@ class Agent(nn.Module):
             states), self.feature_extractor(next_states)
         if algo == "PPO":
 
-            curiosity = self.intrinsic.loss(
-                features, next_features, actions.squeeze())
-            dynamics = self.extrinsic.loss(features, next_features, actions)
+            curiosity = nn.MSELoss(reduction='none')(
+                self.intrinsic.forward(features, actions),
+                next_features).mean(dim=-1)
+
+            dynamics = nn.NLLLoss(reduction='none')(
+                input=self.extrinsic.forward(features,
+                                             next_features), target=actions.squeeze())
             v_s, v_ss = self.critic.forward(
                 features), self.critic.forward(next_features)
             delta = rewards + self.gamma * v_ss - v_s
 
-            v_loss = self.critic.loss(features, reward_to_gos)
+            v_loss = nn.MSELoss(reduction='none')(
+                self.critic.forward(features), reward_to_gos)
 
             advantages = self.discount_cumsum(
                 delta, self.gamma * self.lamb)
             adv_std, adv_mean = torch.std_mean(advantages)
+            adv_min = torch.min(advantages)
             adv = (advantages - adv_mean) / (adv_std + self.offset)
 
             pi = self.policy(states)
@@ -355,9 +360,9 @@ class Agent(nn.Module):
             clip_ratio = torch.clamp(
                 ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
 
-            _loss = torch.mean(torch.minimum(ratio, clip_ratio)).neg() + (0.01 * entropy.mean()).neg() + 0.5 * v_loss \
-                + self.scaling_factor * curiosity \
-                + (1 - self.scaling_factor) * dynamics
+            _loss = (-torch.minimum(ratio, clip_ratio).squeeze() - (0.05 * entropy) + 0.5 * v_loss.squeeze()
+                     + 0.1 * self.scaling_factor * curiosity
+                     + 0.1 * (1 - self.scaling_factor) * dynamics).mean()
 
             return _loss
 
